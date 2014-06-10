@@ -16,6 +16,7 @@ A* algorithm from http://www.policyalmanac.org/games/aStarTutorial.htm
 """
 
 from enum import Enum
+from heapq import heappop, heappush, heapify
 
 from math import sin, radians, cos, atan2, sqrt
 from operator import attrgetter
@@ -208,18 +209,18 @@ class Router(object):
         self.from_.h = self.path_estimate(self.from_.node, self.to)
 
         self.visited = []
-        self.stack = [self.from_]
+        self.heap = [(self.from_.f, self.from_)]
         self.nodes = []
 
-        while len(self.stack) > 0:
-            self.stack.sort(key=attrgetter('f'))
-            selected = self.stack.pop(0)
+        while self.heap:
+            selected = heappop(self.heap)[1]
+
             self.visited.append(selected)
 
             print("Exploring %(node_id)s (%(distance).03f km to go, %(visited)s nodes seen, %(roads)s roads left)" % {
                 'node_id': repr(selected.node.id),
                 'distance': selected.h,
-                'roads': len(self.stack),
+                'roads': len(self.heap),
                 'visited': len(self.visited),
             })
 
@@ -278,17 +279,24 @@ class Router(object):
 
             g = from_.g + self.path_cost(way, from_.node, step.node)
 
-            if step in self.stack:
-                other = [n for n in self.stack if n == step][0]
-                if other.g > g:
-                    self.stack.remove(other)
-                else:
+            for index, (_, other) in enumerate(self.heap):
+                if step != other:
+                    continue
+                if other.g <= g:
                     # We've already found a shorter route to this node; the
                     # remainder of the way can be skipped as well.
-                    break
+                    return
+
+                # Remove the other item from the heap. How the delete works is
+                # discussed here: http://stackoverflow.com/a/10163422/58107.
+                self.heap[index] = self.heap[-1]
+                self.heap.pop()
+                heapify(self.heap)
+
+                break
 
             node = VisitedNode(step.node, parent=from_, g=g, h=self.path_estimate(step.node, self.to))
-            self.stack.append(node)
+            heappush(self.heap, (node.f, node))
             print("    √ %s" % node)
 
             from_ = node
