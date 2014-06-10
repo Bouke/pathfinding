@@ -145,6 +145,11 @@ class Way(object):
     def motorcyle(self):
         return self.get_tag("motorcyle") or self.vehicle
 
+    @property
+    def maxspeed(self):
+        t = self.get_tag("maxspeed")
+        return float(t) if t else None
+
     def get_tag(self, key):
         tag = self.element.find('tag[@k="%s"]' % key)
         return tag.attrib['v'] if tag is not None else None
@@ -168,7 +173,7 @@ class RouteType(Enum):
 
 
 class Router(object):
-    highways = {
+    accessibility = {
         'motorway': (RouteType.car,),
         'trunk': (RouteType.car,),
         'primary': (RouteType.car,),
@@ -177,6 +182,18 @@ class Router(object):
         'unclassified': (RouteType.car,),
         'residential': (RouteType.car,),
         'service': (RouteType.car,),
+    }
+
+    # @todo Find out correct default max speeds.
+    maxspeeds = {
+        'motorway': 130,
+        'trunk': 100,
+        'primary': 80,
+        'secondary': 50,
+        'tertiary': 50,
+        'unclassified': 30,
+        'residential': 30,
+        'service': 10,
     }
 
     def __init__(self, route_type, from_, to):
@@ -188,7 +205,7 @@ class Router(object):
 
     def route(self):
         self.from_.g = 0
-        self.from_.h = self.distance(self.from_.node, self.to)
+        self.from_.h = self.path_estimate(self.from_.node, self.to)
 
         self.visited = []
         self.stack = [self.from_]
@@ -223,40 +240,66 @@ class Router(object):
         for way in get_ways(selected.node):
             # print(" [w] %s" % repr(way))
 
-            nodes = way.nodes
+            self.walk(way, selected, True)
+            self.walk(way, selected, False)
 
-            # Filter the nodes adjacent to the selected node
-            index = nodes.index(selected.node)
-            path_nodes = nodes[index + 1:index + 2]
-            if index > 0:
-                path_nodes += nodes[index - 1:index]
+    def walk(self, way, from_, forward=True):
+        """
+        This method tries to walk the way in the given direction. If stumbles
+        unto an unwalkable path, it will stop walking.
 
-            for ref in path_nodes:
-                if not self.is_way_section_accessible(way, selected.node, ref.node):
-                    continue
+        @todo Skip a way's non-junction nodes.
+        """
+        nodes = way.nodes
+        index = nodes.index(from_)
 
-                g = selected.g + self.distance(selected.node, ref.node)
+        if forward:
+            walk_nodes = way.nodes[index + 1:index + 100]
+        else:
+            if index == 0:
+                # We're at the beginning of the path.
+                return
+            walk_nodes = way.nodes[index - 100:index]
 
-                if ref in self.visited:
-                    continue
+        print("  Found %d steps on %s" % (len(walk_nodes), way.name))
 
-                if ref in self.stack:
-                    other = [n for n in self.stack if n == ref.node][0]
-                    if other.g > g:
-                        self.stack.remove(other)
-                    else:
-                        continue
+        for step in walk_nodes:
+            if not self.is_way_section_accessible(way, from_, step):
+                # Remaining nodes are not accessible, so there's no point in
+                # walking them. Also these nodes cannot be marked as visited,
+                # as they might be accessible through a different path.
+                break
 
-                self.stack.append(VisitedNode(ref.node, parent=selected, g=g, h=self.distance(ref.node, self.to)))
-                # print("    √ %s" % ref.node)
+            if step in self.visited:
+                # We've already been here, and most likely also visited the
+                # remainder of the street. So we can safely skip the
+                # remainder of the way.
+                break
+
+            g = from_.g + self.path_cost(way, from_.node, step.node)
+
+            if step in self.stack:
+                other = [n for n in self.stack if n == step][0]
+                if other.g > g:
+                    self.stack.remove(other)
+                else:
+                    # We've already found a shorter route to this node; the
+                    # remainder of the way can be skipped as well.
+                    break
+
+            node = VisitedNode(step.node, parent=from_, g=g, h=self.path_estimate(step.node, self.to))
+            self.stack.append(node)
+            print("    √ %s" % node)
+
+            from_ = node
 
     def is_way_section_accessible(self, way, from_, to):
         if way.oneway and way.nodes.index(from_) > way.nodes.index(to):
             print("    ｘ %(way)s is one-way" % {'way': way.name})
             return False
 
-        if self.route_type not in self.highways.get(way.highway, ()):
-            print("    x %(way)s is not accessible (type: '%(highway)s')" % {
+        if self.route_type not in self.accessibility.get(way.highway, ()):
+            print("    ｘ %(way)s is not accessible (type: '%(highway)s')" % {
                 'way': way.name,
                 'highway': way.highway,
             })
@@ -270,6 +313,15 @@ class Router(object):
             return False
 
         return True
+
+    def path_cost(self, way, from_, to):
+        d = self.distance(from_, to)
+        s = way.maxspeed or self.maxspeeds[way.highway]
+        return d/s
+
+    def path_estimate(self, from_, to):
+        # Estimated speed of 50 km/h. What is a better estimate?
+        return self.distance(from_, to) / 50
 
     def distance(self, from_, to):
         return distance((from_.lat, from_.lon), (to.lat, to.lon))
