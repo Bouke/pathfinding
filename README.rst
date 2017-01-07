@@ -1,3 +1,5 @@
+Note: this is a dump of some experimental code. Use only for your own experiments.
+
 A* pathfinding algorithm in Python using OSM data.
 
 Instructions:
